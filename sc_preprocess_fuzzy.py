@@ -24,6 +24,7 @@ handle = "GAGAGCGAGACAGAAG"
 GAT21 = "GATGGTTGAGGATGTGTGGAG"
 sampleBC_codes = {}
 cellBC_codes = []
+cellBC_codes2 = "--".join(cellBC_codes)
 
 print("Reading sample barcode file...", flush=True)
 with open(sampleBCfileName) as sampleBCfile:
@@ -31,12 +32,10 @@ with open(sampleBCfileName) as sampleBCfile:
         vals = line.split(",")
         sampleBC_codes[vals[0]] = vals[1]
 print("Sample file read", flush=True)
-
+print("Reading Cell BC file...", flush=True)
 with open(cellBCfileName) as cellBCfile:
-    for line in cellBCfile:
-        vals = line.split(",")
-        sampleBC_codes[vals[0]] = vals[1]
-print("Sample file read", flush=True)
+    cellBC_codes = [line.rstrip('\n') for line in cellBCfile]
+print("Cell BC file read", flush=True)
 
 #fastq_files = [f for f in listdir(fastqgz_directory) if isfile(join(fastqgz_directory, f))]
 
@@ -146,6 +145,16 @@ def Processfile(fq, outfilename):
     print(str(noHandles) + " reads had no valid handle.")
 
 def CheckCellBarcode(bc):
+    match = ""
+    if bc in cellBC_codes:
+        return bc
+    else:
+        pattern = "(" + bc + "){e<=1}"
+        match = regex.match(pattern, cellBC_codes2)
+        if match is None: return None
+        else: return match.string
+
+
 
 
 
