@@ -14,8 +14,8 @@ from multiprocessing.pool import ThreadPool
 #outdir = sys.argv[2]
 #sampleBCfile = sys.argv[3]
 #sampleAmounts = 3
-#fastqgz_directory = "/home/davidbellini/files/atlas/data/"
-fastqgz_directory = "C:/Users/david_n6jk0pe/OneDrive - Baylor College of Medicine/gabbiani/ATLAS/"
+fastqgz_directory = "/home/davidbellini/files/atlas/data/"
+#fastqgz_directory = "C:/Users/david_n6jk0pe/OneDrive - Baylor College of Medicine/gabbiani/ATLAS/"
 sampleBCfileName = "samplebarcodes.csv"
 cellBCfileName = "cellbarcodes.txt"
 sampleAmounts = 3 # how many samples are in each file?
@@ -27,7 +27,6 @@ handle = "GAGAGCGAGACAGAAG"
 GAT21 = "GATGGTTGAGGATGTGTGGAG"
 sampleBC_codes = {}
 cellBC_codes = []
-cellBC_codes2 = "--".join(cellBC_codes)
 
 print("Reading sample barcode file...", flush=True)
 with open(sampleBCfileName) as sampleBCfile:
@@ -40,6 +39,10 @@ print("Reading Cell BC file...", flush=True)
 with open(cellBCfileName) as cellBCfile:
     cellBC_codes = [line.rstrip('\n') for line in cellBCfile]
 print("Cell BC file read", flush=True)
+
+#by joining all the codes into one searchable string we avoid having very long for loops that impact performance
+cellBC_codes2 = " ".join(cellBC_codes)
+
 
 #fastq_files = [f for f in listdir(fastqgz_directory) if isfile(join(fastqgz_directory, f))]
 
@@ -149,7 +152,7 @@ def Processfile(fq, outfilename):
     print(str(totalReads) + " total reads")
 
 # A function that writes bad barcodes and reads to a file for debug
-# This function significantly increases runtime, when bc are debugged please opt to use normal "BadBarcodes" instead.
+# This function significantly increases runtime, when bc are not being debugged please opt to use normal "CorrectCellBarcodes" instead.
 def DebugBadBarcodes(bc1, bc2, read):
     with open("badBarcodes.txt", 'a') as badBarcode_file:
         BC1_check = CheckCellBarcode(bc1)
@@ -163,14 +166,21 @@ def DebugBadBarcodes(bc1, bc2, read):
             return None
         else: return BC1_check + BC2_check
 
+def CorrectCellBarcodes(bc1, bc2):
+    BC1_check = CheckCellBarcode(bc1)
+    BC2_check = CheckCellBarcode(bc2)
+    if None in [BC1_check, BC2_check]:
+        return None
+    else: return BC1_check + BC2_check
+
 def CheckCellBarcode(bc):
     if bc in cellBC_codes:
         return bc
     else:
         pattern = "(" + bc + "){e<=1}"
-        match = regex.match(pattern, cellBC_codes2, regex.BESTMATCH)
+        match = regex.search(pattern, cellBC_codes2, regex.BESTMATCH)
         if match is None: return None
-        else: return match.string
+        else: return match.group(1)
 
 def CheckSampleBarcode(bc):
     match = None
@@ -181,7 +191,7 @@ def CheckSampleBarcode(bc):
         for sampleBCs in sampleBC_codes.values():
             match = regex.match(pattern, sampleBCs, regex.BESTMATCH)
         if match is None: return None
-        else: return match.string
+        else: return match.group(1)
 
 def SkipToNextRead(file):
     try:
@@ -193,5 +203,5 @@ def SkipToNextRead(file):
 
 
 
-#Processfile("OL456_D1_merged.fq.gz", "OL456_D1_processed.fq.gz")
-Processfile("test_merged.fq.gz", "test_merged_processed.fq.gz")
+Processfile("OL456_D1_merged.fq.gz", "OL456_D1_processed.fq.gz")
+#Processfile("test_merged.fq.gz", "test_merged_processed.fq.gz")
