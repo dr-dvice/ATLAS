@@ -4,24 +4,24 @@
 # PLEASE HAVE FILE NAMES IN THE FORMAT OF: OL_ID1_ID2_ID3_LANENUM_merged.fq.gz
 # For example OL_04_05_06_D1_CKD220028955-1A_HK7KLDSX5_L3_1.fq.gz
 
-import os.path
 import sys
 from os import listdir
 from os.path import isfile, join
 import gzip
-#import re
 import regex
 from multiprocessing.pool import ThreadPool
 
-#fastqgz_directory = sys.argv[1]
+fastqgz_directory = sys.argv[1]
 #outdir = sys.argv[2]
-#sampleBCfile = sys.argv[3]
-#sampleAmounts = 3
-fastqgz_directory = "/home/davidbellini/files/atlas/data/"
+sampleBCfileName = sys.argv[2]
+
+MAX_THREADS = 8
+#fastqgz_directory = "/home/davidbellini/files/atlas/data/"
+
 #fastqgz_directory = "C:/Users/david_n6jk0pe/OneDrive - Baylor College of Medicine/gabbiani/ATLAS/"
-sampleBCfileName = "samplebarcodes.csv"
+#sampleBCfileName = "samplebarcodes.csv"
 cellBCfileName = "cellbarcodes.txt"
-sampleAmounts = 3 # how many samples are in each file?
+outputFolder = "/home/davidbellini/files/atlas/data/"
 
 BClen = 8 #expected length of the barcodes
 MAX_HANDLE_POS = 17 #Handle is not expected to the farther than 16 bases from the start
@@ -47,9 +47,9 @@ print("Cell BC file read", flush=True)
 #cellBC_codes2 = " ".join(cellBC_codes)
 #had to discontinue this as it was causing matches of 7 nucleotides when I need the whole 8 nucl barcode
 
-#fastq_files = [f for f in listdir(fastqgz_directory) if isfile(join(fastqgz_directory, f))]
+fastq_files = [f for f in listdir(fastqgz_directory) if isfile(join(fastqgz_directory, f))]
 
-def Processfile(fq, outfilename):
+def Processfile(fq, number):
     print("Processing " + fq + " ...", flush=True)
     fq_path = fastqgz_directory + fq
     blockbuilder = ""
@@ -93,7 +93,8 @@ def Processfile(fq, outfilename):
                 outfile = sample_filewriters[sampleBC_to_ID[sampleBC_check]]
                 # do all the processing here. First we add the appropriate barcode and umi to the string
                 idBits = idLine.split(' ')
-                idBits[0] += "_" + curBC + "_" + umi #TODO: Handle umi BC standardization
+                standardizedUMI = umi[:6]
+                idBits[0] += "_" + curBC + "_" + standardizedUMI #TODO: Handle umi BC standardization
                 idBits = " ".join(idBits)
                 blockbuilder += idBits
                 # then we add in the stripped DNA
@@ -179,7 +180,6 @@ def Processfile(fq, outfilename):
     print("\t-" + "Bad Sample BC percentage: " + str(badSample_percent) + "%")
     print("\t-" + "Total read percentage discarded: " + str(badBC_percent + badHandle_percent + badSample_percent) + "%")
 
-
 # A function that writes bad barcodes and reads to a file for debug
 # This function significantly increases runtime, when bc are not being debugged please opt to use normal "CorrectCellBarcodes" instead.
 def DebugBadBarcodes(bc1, bc2, read):
@@ -233,6 +233,7 @@ def SkipToNextRead(file):
         print(e)
 
 # Generates a list of writers, one for each sample present in a file
+# Requires file names to be formatted as indicated at top of the script
 def GetFileWriters(sampleFileList):
     sampleFileWriterz = {}
     sampleList = []
@@ -247,10 +248,23 @@ def GetFileWriters(sampleFileList):
             laneID = sampleFileList[sampling_index]
             for sample in sampleList:
                 name = (sample + "_" + laneID)
-                sampleFileWriterz[sample] = gzip.open((name + "_processed.fq.gz"), 'wt')
+                sampleFileWriterz[sample] = gzip.open((outputFolder + name + "_processed.fq.gz"), 'wt')
     return sampleFileWriterz
 
+#for fq in (fastq_files):
+#   Processfile(fq)
 
+pool = ThreadPool(processes=MAX_THREADS)
+
+for fq in (fastq_files):
+    # add the files to the multithreading handler
+    result = pool.apply_async(Processfile, args=(fq, 1))
+    #print(result.successful())
+
+pool.close()
+pool.join()
+
+print("All files proccessed!", flush=True)
 
 #Processfile("OL_04_05_06_D1_merged.fq.gz", "OL456_D1_processed.fq.gz")
-Processfile("OL_04_05_06_D1_test_merged.fq.gz", "test_merged_processed.fq.gz")
+#Processfile("OL_04_05_06_D1_test_merged.fq.gz", "test_merged_processed.fq.gz")
