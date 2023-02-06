@@ -17,9 +17,8 @@ sampleBCfileName = sys.argv[2]
 
 MAX_THREADS = 8
 #fastqgz_directory = "/home/davidbellini/files/atlas/data/"
-
 #fastqgz_directory = "C:/Users/david_n6jk0pe/OneDrive - Baylor College of Medicine/gabbiani/ATLAS/"
-#sampleBCfileName = "samplebarcodes.csv"
+#sampleBCfileName = "samplebarcodes456.csv"
 cellBCfileName = "cellbarcodes.txt"
 outputFolder = "/home/davidbellini/files/atlas/data/"
 
@@ -61,6 +60,7 @@ def Processfile(fq, number):
     faultyBarcodes = 0
     totalReads = 0
     faultySampleBC = 0
+    savedRead1 = ""
     open("badBarcodes.txt", "w").close() #clears badbarcodes file
 
     # Create a file writer for each sample present
@@ -71,7 +71,7 @@ def Processfile(fq, number):
     with gzip.open(fq_path, 'rt') as f:
         read2 = False
         curBC = ""
-        umi = ""
+        #umi = ""
         rna_to_write = ""
         trimmed_QC = ""
         idLine = ""
@@ -93,8 +93,8 @@ def Processfile(fq, number):
                 outfile = sample_filewriters[sampleBC_to_ID[sampleBC_check]]
                 # do all the processing here. First we add the appropriate barcode and umi to the string
                 idBits = idLine.split(' ')
-                standardizedUMI = umi[:6]
-                idBits[0] += "_" + curBC + "_" + standardizedUMI #TODO: Handle umi BC standardization
+                standardizedUMI = savedRead1[:6] #Sometimes this overlaps with the first letter of the barcode if there is a read error where one of the UMI letters is missing
+                idBits[0] += "_" + curBC + "_" + standardizedUMI
                 idBits = " ".join(idBits)
                 blockbuilder += idBits
                 # then we add in the stripped DNA
@@ -105,7 +105,7 @@ def Processfile(fq, number):
                 blockbuilder += trimmed_QC
                 # write and reset
                 outfile.write(blockbuilder)
-                blockbuilder = curBC = rna_to_write = umi = ""
+                blockbuilder = curBC = rna_to_write = ""
                 # Skip the next two lines in the file cause we don't care about this read aside from the UMI
                 next(f)
                 next(f)
@@ -116,6 +116,7 @@ def Processfile(fq, number):
                 print("UNHANDLED CODE")
                 break
             if nextLineDNA:
+                savedRead1 = line
                 nextLineDNA = False
                 totalReads+=1
                 curBC = rna_to_write = trimmed_QC = ""
@@ -143,7 +144,7 @@ def Processfile(fq, number):
                     faultyBarcodes+=1
                     SkipToNextRead(f)
                     continue
-                umi = line[:(handle_start-BClen)]
+                #umi = line[:(handle_start-BClen)]
                 rna_to_write = line[(handle_end+HANDLE_TO_READ_LEN):]
                 if end_of_file: break
                 next(f) # I think we can just skip the + line entirely
@@ -251,20 +252,18 @@ def GetFileWriters(sampleFileList):
                 sampleFileWriterz[sample] = gzip.open((outputFolder + name + "_processed.fq.gz"), 'wt')
     return sampleFileWriterz
 
-#for fq in (fastq_files):
-#   Processfile(fq)
 
 pool = ThreadPool(processes=MAX_THREADS)
 
-for fq in (fastq_files):
-    # add the files to the multithreading handler
+for fq in fastq_files:
+    #add the files to the multithreading handler
     result = pool.apply_async(Processfile, args=(fq, 1))
     #print(result.successful())
 
 pool.close()
 pool.join()
 
-print("All files proccessed!", flush=True)
+#print("All files processed!", flush=True)
 
 #Processfile("OL_04_05_06_D1_merged.fq.gz", "OL456_D1_processed.fq.gz")
-#Processfile("OL_04_05_06_D1_test_merged.fq.gz", "test_merged_processed.fq.gz")
+#Processfile("OL_04_05_06_test.fq.gz", "456_test_processed.fq.gz")
