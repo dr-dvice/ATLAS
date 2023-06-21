@@ -24,6 +24,7 @@ outputFolder = "/home/davidbellini/files/workspace/june_run/testbed/results/"
 BClen = 10 #expected length of the barcodes
 UMIlen = 8
 MAX_HANDLE_POS = 15 #Handle is not expected to the farther than 16 bases from the start
+# debugmode and single column mode require fixes if they are to be used in the future
 debugMode = False
 BC2colmode = True
 handle = "TGGTAGGTGGTAGAGA"
@@ -32,6 +33,7 @@ sampleBC_to_ID = {}
 cellBC_codes = []
 cellBC_codes_col1 = []
 cellBC_codes_col2 = []
+
 
 def Read2ColBarcodes(filename):
     barcodes1 = []
@@ -68,6 +70,8 @@ def Processfile(fq):
     faultyBarcodes = 0
     totalReads = 0
     read2short = 0
+    BCmutationstats = [0,0,0] #subsitutions insertions deletions
+
     open((outputFolder + "badBarcodes.txt"), "w").close() #clears badbarcodes file
 
     # read content from original fastq file and prep for processing
@@ -109,7 +113,7 @@ def Processfile(fq):
                     barcode1 = line[(startpos - BClen):startpos]
                     barcode2 = line[endpos:(endpos + BClen)]
                     if debugMode: cBarcode = DebugBadBarcodes(barcode1, barcode2, line) #TODO: allow debugmode and 2colmode
-                    elif BC2colmode: cBarcode = CorrectCellBarcodes2col(barcode1, barcode2, line)
+                    elif BC2colmode: cBarcode = CorrectCellBarcodes2col(barcode1, barcode2, line, BCmutationstats)
                     else: cBarcode = CorrectCellBarcodes(barcode1, barcode2)
                     if cBarcode is None:
                         faultyBarcodes+=1
@@ -165,16 +169,22 @@ def Processfile(fq):
     print("\t-" + str(noHandles) + " reads had no valid handle.")
     print("\t-" + str(read2short) + " reads were too short to read the barcodes")
     print("\t-" + str(faultyBarcodes) + " reads with at least one faulty barcodes")
+    print("\t-" + str(sum(BCmutationstats)) + " Barcodes were corrected:")
+    print("\t\t-" + str(BCmutationstats[0]) + " subsitutions")
+    print("\t\t-" + str(BCmutationstats[1]) + " (Insertions not tested)")
+    print("\t\t-" + str(BCmutationstats[2]) + " deletions")
     print("\t-" + str(totalReads) + " total reads")
     # Reads are discarded in this order and are cumulative, so they are output in this order.
 
     badHandle_percent = round(((noHandles + falseHandlesNum) / totalReads) * 100, 1)
     read2short_percent = round((read2short / totalReads) * 100, 1) #rounds to nearest tenth
     faultyBarcodes_percent = round((faultyBarcodes / totalReads) * 100, 1)
+    correctedBarcodes_percent = round((sum(BCmutationstats) / totalReads) * 100, 1)
     print("\t-" + "Bad Handle Percentage: " + str(badHandle_percent) + "%")
-    print("\t-" + "Short read percentage: " + str(read2short_percent) + "%")
-    print("\t-" + "Bad Cell BC Percentage: " + str(faultyBarcodes_percent) + "%")
-    print("\t-" + "Total read percentage discarded: " + str(round((read2short_percent + badHandle_percent + faultyBarcodes_percent), 1 )) + "%")
+    print("\t-" + "Short Read Percentage: " + str(read2short_percent) + "%")
+    print("\t-" + "Corrected Barcode percentage: " + str(correctedBarcodes_percent) + "%")
+    print("\t-" + "Discarded Cell BC Percentage: " + str(faultyBarcodes_percent) + "%")
+    print("\t-" + "Total Read Percentage Discarded: " + str(round((read2short_percent + badHandle_percent + faultyBarcodes_percent), 1 )) + "%")
 
 # A function that writes bad barcodes and reads to a file for debug
 # This function significantly increases runtime, when bc are not being debugged please opt to use normal "CorrectCellBarcodes" instead.
@@ -191,6 +201,7 @@ def DebugBadBarcodes(bc1, bc2, read):
             return None
         else: return BC1_check + BC2_check
 
+# DEPRECATED: requires same optimizations implemented in the 2col version.
 def CorrectCellBarcodes(bc1, bc2):
     BC1_check = CheckCellBarcode(bc1)
     BC2_check = CheckCellBarcode(bc2)
@@ -208,14 +219,14 @@ def CheckCellBarcode(bc):
             if match is not None: return cellBC
         return None
 
-def CorrectCellBarcodes2col(bc1, bc2, line):
-    BC1_check = CheckCellBarcode2col(bc1, 1, line)
-    BC2_check = CheckCellBarcode2col(bc2, 2, line)
+def CorrectCellBarcodes2col(bc1, bc2, line, BCmutationstats_list):
+    BC1_check = CheckCellBarcode2col(bc1, 1, line, BCmutationstats_list)
+    BC2_check = CheckCellBarcode2col(bc2, 2, line, BCmutationstats_list)
     if None in [BC1_check, BC2_check]:
         return None
     else: return BC1_check + BC2_check
 
-def CheckCellBarcode2col(bc, col, line):
+def CheckCellBarcode2col(bc, col, line, BCmutationstats_list):
     cellBCs = cellBC_codes_col1 if col == 1 else cellBC_codes_col2
     if bc in cellBCs:
         return bc
@@ -228,16 +239,19 @@ def CheckCellBarcode2col(bc, col, line):
             if match is not None:
                 matches.append(match)
                 possibleBCs.append(cellBC)
-        if len(possibleBCs) > 1:
-            print(line + " - " + bc)
-            for i, element in enumerate(matches):
-                print(element, flush=True)
-                print(" " + possibleBCs[i])
-            return None
-        elif len(possibleBCs) == 0:
-            return None
-        else:
-            return possibleBCs[0]
+        if len(possibleBCs) > 0:
+            if len(possibleBCs) > 1:
+                for i, element in enumerate(matches):
+                    if (element.span()[1] - element.span()[0]) == BClen:  # Only select the match that is actually an entire barcode length
+                        # previous testing of this part has determined that only one match will equal the barcode length, the other ones will be shorter
+                        BCmutationstats_list[0]+=1 #In this situation, has to be a subsitutions
+                        return possibleBCs[i]
+            else:
+                # Keeping track of the amount of subsitutions and deletions
+                for i in range(len(BCmutationstats_list)):
+                    BCmutationstats_list[i] += matches[0].fuzzy_counts[i]
+                return possibleBCs[0]
+        else: return None
 
 def SkipToNextRead(file):
     try:
