@@ -211,7 +211,11 @@ def CheckCellBarcode(bc):
 def CorrectCellBarcodes2col(bc1, bc2, line):
     BC1_check = CheckCellBarcode2col(bc1, 1, line)
     BC2_check = CheckCellBarcode2col(bc2, 2, line)
-    if None in [BC1_check, BC2_check]:def CheckCellBarcode2col(bc, col, line):
+    if None in [BC1_check, BC2_check]:
+        return None
+    else: return BC1_check + BC2_check
+
+def CheckCellBarcode2col(bc, col, line):
     cellBCs = cellBC_codes_col1 if col == 1 else cellBC_codes_col2
     if bc in cellBCs:
         return bc
@@ -234,10 +238,6 @@ def CorrectCellBarcodes2col(bc1, bc2, line):
             return None
         else:
             return possibleBCs[0]
-        return None
-    else: return BC1_check + BC2_check
-
-
 
 def SkipToNextRead(file):
     try:
