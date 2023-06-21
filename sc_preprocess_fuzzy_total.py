@@ -17,22 +17,40 @@ MAX_THREADS = 8
 fastqgz_directory = "/home/davidbellini/files/workspace/june_run/testbed/"
 #fastqgz_directory = "C:/Users/david_n6jk0pe/OneDrive - Baylor College of Medicine/gabbiani/ATLAS/"
 #sampleBCfileName = "samplebarcodes456.csv"
-cellBCfileName = "/home/davidbellini/files/workspace/june_run/testbed/MATQ_Drop_384_barcodes.txt"
+#cellBCfileName = "/home/davidbellini/files/workspace/june_run/testbed/MATQ_Drop_384_barcodes.txt"
+cellBCfileName = "/home/davidbellini/files/workspace/june_run/testbed/MATQ_Drop_384x384_barcode.tsv"
 outputFolder = "/home/davidbellini/files/workspace/june_run/testbed/results/"
 
 BClen = 10 #expected length of the barcodes
 UMIlen = 8
 MAX_HANDLE_POS = 15 #Handle is not expected to the farther than 16 bases from the start
-#HANDLE_TO_READ_LEN = 38 #Expected distance from the end of the handle to the actual read.
+debugMode = False
+BC2colmode = True
 handle = "TGGTAGGTGGTAGAGA"
 handlePattern = "(" + handle + "){e<=3}"
-#GAT21 = "GATGGTTGAGGATGTGTGGAG"
 sampleBC_to_ID = {}
 cellBC_codes = []
+cellBC_codes_col1 = []
+cellBC_codes_col2 = []
+
+def Read2ColBarcodes(filename):
+    barcodes1 = []
+    barcodes2 = []
+    with open (filename) as file:
+        for line in file:
+            data = line.strip().split("\t")
+            barcodes1.append(data[0])
+            barcodes2.append(data[1])
+    return barcodes1, barcodes2
 
 print("Reading Cell BC file...", flush=True)
-with open(cellBCfileName) as cellBCfile:
-    cellBC_codes = [line.rstrip('\n') for line in cellBCfile]
+
+if BC2colmode:
+    cellBC_codes_col1, cellBC_codes_col2 = Read2ColBarcodes(cellBCfileName)
+else:
+    with open(cellBCfileName) as cellBCfile:
+        cellBC_codes = [line.rstrip('\n') for line in cellBCfile]
+
 print("Cell BC file read", flush=True)
 
 #fastq_files = [f for f in listdir(fastqgz_directory) if isfile(join(fastqgz_directory, f))]
@@ -62,7 +80,6 @@ def Processfile(fq):
         idLine = ""
         nextLineDNA = False
         end_of_file = False
-        debugMode = True
         # loop through each read and save each piece of info into respective string tag
         for line in f:
             if read2: #Read 2 is where we do most of our processing. Here we need to extract the barcodes and umi,
@@ -91,7 +108,8 @@ def Processfile(fq):
                 if ((startpos - BClen) >= 0) and ((endpos + (BClen + UMIlen)) < len(line)):
                     barcode1 = line[(startpos - BClen):startpos]
                     barcode2 = line[endpos:(endpos + BClen)]
-                    if debugMode: cBarcode = DebugBadBarcodes(barcode1, barcode2, line)
+                    if debugMode: cBarcode = DebugBadBarcodes(barcode1, barcode2, line) #TODO: allow debugmode and 2colmode
+                    elif BC2colmode: cBarcode = CorrectCellBarcodes2col(barcode1, barcode2, line)
                     else: cBarcode = CorrectCellBarcodes(barcode1, barcode2)
                     if cBarcode is None:
                         faultyBarcodes+=1
@@ -184,11 +202,42 @@ def CheckCellBarcode(bc):
     if bc in cellBC_codes:
         return bc
     else:
-        pattern = "(" + bc + "){e<=2}"
+        pattern = "(" + bc + "){e<=1}"
         for cellBC in cellBC_codes:
             match = regex.search(pattern, cellBC, regex.BESTMATCH)
             if match is not None: return cellBC
         return None
+
+def CorrectCellBarcodes2col(bc1, bc2, line):
+    BC1_check = CheckCellBarcode2col(bc1, 1, line)
+    BC2_check = CheckCellBarcode2col(bc2, 2, line)
+    if None in [BC1_check, BC2_check]:def CheckCellBarcode2col(bc, col, line):
+    cellBCs = cellBC_codes_col1 if col == 1 else cellBC_codes_col2
+    if bc in cellBCs:
+        return bc
+    else:
+        possibleBCs = []
+        matches = []
+        pattern = "(" + bc + "){e<=1}"
+        for cellBC in cellBCs:
+            match = regex.search(pattern, cellBC, regex.BESTMATCH) #Fuzzy_counts=(subsitutions, insertions, deletions)
+            if match is not None:
+                matches.append(match)
+                possibleBCs.append(cellBC)
+        if len(possibleBCs) > 1:
+            print(line + " - " + bc)
+            for i, element in enumerate(matches):
+                print(element, flush=True)
+                print(" " + possibleBCs[i])
+            return None
+        elif len(possibleBCs) == 0:
+            return None
+        else:
+            return possibleBCs[0]
+        return None
+    else: return BC1_check + BC2_check
+
+
 
 def SkipToNextRead(file):
     try:
