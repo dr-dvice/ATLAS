@@ -1,6 +1,8 @@
 # Author: David Bellini
-# Date: 6.19.23
+# Date: 8.24.23
 # A script to conduct all necessary preprocessing on raw single cell data for the cell atlas, total RNA format.
+# Optimizations needed:
+#   - Reading and writing optimizations: read single string, then write single string.
 
 import sys
 from os import listdir
@@ -8,31 +10,32 @@ from os.path import isfile, join
 import gzip
 import regex
 from multiprocessing.pool import ThreadPool
+import traceback
+#from line_profiler_pycharm import profile
 
 #fastqgz_directory = sys.argv[1]
 #outdir = sys.argv[2]
 #sampleBCfileName = sys.argv[2]
 
-MAX_THREADS = 8
-fastqgz_directory = "/home/davidbellini/files/workspace/june_run/testbed/"
-#fastqgz_directory = "C:/Users/david_n6jk0pe/OneDrive - Baylor College of Medicine/gabbiani/ATLAS/"
-#sampleBCfileName = "samplebarcodes456.csv"
-#cellBCfileName = "/home/davidbellini/files/workspace/june_run/testbed/MATQ_Drop_384_barcodes.txt"
-cellBCfileName = "/home/davidbellini/files/workspace/june_run/testbed/MATQ_Drop_384x384_barcode.tsv"
-outputFolder = "/home/davidbellini/files/workspace/june_run/testbed/results/"
 
+# Directory shortcuts
+fastqgz_directory = "/home/davidbellini/files/workspace/gg_ol1_analysis/pp_fuzzy_rdy/"
+cellBCfileName = "/home/davidbellini/files/workspace/gg_ol1_analysis//MATQ_Drop_384x384_barcode.tsv"
+outputFolder = "/home/davidbellini/files/workspace/gg_ol1_analysis/results/"
+
+# Parameter Vars
+
+MAX_THREADS = 4
 BClen = 10 #expected length of the barcodes
+DIVIDER = BClen + 2
 UMIlen = 8
-MAX_HANDLE_POS = 15 #Handle is not expected to the farther than 16 bases from the start
+MAX_HANDLE_POS = 45 #Handle is not expected to the farther than 16 bases from the start
 # debugmode and single column mode require fixes if they are to be used in the future
 debugMode = False
-BC2colmode = True
 handle = "TGGTAGGTGGTAGAGA"
 handlePattern = "(" + handle + "){e<=3}"
 sampleBC_to_ID = {}
 cellBC_codes = []
-cellBC_codes_col1 = []
-cellBC_codes_col2 = []
 
 
 def Read2ColBarcodes(filename):
@@ -47,17 +50,17 @@ def Read2ColBarcodes(filename):
 
 print("Reading Cell BC file...", flush=True)
 
-if BC2colmode:
-    cellBC_codes_col1, cellBC_codes_col2 = Read2ColBarcodes(cellBCfileName)
-else:
-    with open(cellBCfileName) as cellBCfile:
-        cellBC_codes = [line.rstrip('\n') for line in cellBCfile]
+
+cellBC_list_col1, cellBC_list_col2 = Read2ColBarcodes(cellBCfileName)
+cellBC_str_col1 = "..".join(cellBC_list_col1)
+cellBC_str_col2 = "..".join(cellBC_list_col2)
 
 print("Cell BC file read", flush=True)
 
-#fastq_files = [f for f in listdir(fastqgz_directory) if isfile(join(fastqgz_directory, f))]
+fastq_files = [f for f in listdir(fastqgz_directory) if isfile(join(fastqgz_directory, f))]
 
-def Processfile(fq):
+#@profile
+def Processfile(fq, synth_code):
     print("Processing " + fq + " ...", flush=True)
     fq_path = fastqgz_directory + fq
     blockbuilder = ""
@@ -71,8 +74,6 @@ def Processfile(fq):
     totalReads = 0
     read2short = 0
     BCmutationstats = [0,0,0] #subsitutions insertions deletions
-
-    open((outputFolder + "badBarcodes.txt"), "w").close() #clears badbarcodes file
 
     # read content from original fastq file and prep for processing
     with gzip.open(fq_path, 'rt') as f:
@@ -112,22 +113,22 @@ def Processfile(fq):
                 if ((startpos - BClen) >= 0) and ((endpos + (BClen + UMIlen)) < len(line)):
                     barcode1 = line[(startpos - BClen):startpos]
                     barcode2 = line[endpos:(endpos + BClen)]
-                    if debugMode: cBarcode = DebugBadBarcodes(barcode1, barcode2, line) #TODO: allow debugmode and 2colmode
-                    elif BC2colmode: cBarcode = CorrectCellBarcodes2col(barcode1, barcode2, line, BCmutationstats)
-                    else: cBarcode = CorrectCellBarcodes(barcode1, barcode2)
+                    if debugMode: cBarcode = DebugBadBarcodes(barcode1, barcode2, line, BCmutationstats)
+                    else: cBarcode = CorrectCellBarcodes2col(barcode1, barcode2, line, BCmutationstats)
                     if cBarcode is None:
                         faultyBarcodes+=1
                         SkipToNextRead(f)
                         ResetVars(idLine, rna_to_write, QC_line)
                         continue
                     else: # Checks successfull, here we actually take the read and the umi and create the new ID line for read 1.
-                        newIDline = cBarcode + "_" + line[UMIStartpos:(UMIStartpos + UMIlen)]
+                        # I use to also have a + "_" between synth code and cBarcode but that just makes thing more complicated furthe down the line
+                        newIDline = "_" + synth_code + cBarcode + "_" + line[UMIStartpos:(UMIStartpos + UMIlen)]
                         idBits = idLine.split(' ')
                         idBits[0] += newIDline
                         idBits = " ".join(idBits)
                         # Time to jot everything down
-                        blockbuilder = idBits + "\n" + rna_to_write + "\n" + "+" + QC_line
-                        outfile.write(blockbuilder)
+                        blockbuilder += idBits  + rna_to_write + "+"  + "\n" + QC_line
+
                 else:
                     read2short+=1
                 # Skip the next two lines in the file cause we don't care about this read aside from the BC info it gives
@@ -141,6 +142,8 @@ def Processfile(fq):
                 totalReads+=1
                 if totalReads % 1000000 == 0:
                     print(name + ": " + str(totalReads) + " reads processed", flush=True)
+                    outfile.write(blockbuilder) #WRITE OUT EVERY MILLION LINES. Hopefully the /n are working
+                    blockbuilder=""
                 if end_of_file: break
                 next(f) # I think we can just skip the + line entirely
             elif line[0] == '@':
@@ -153,6 +156,7 @@ def Processfile(fq):
                 next(f)
 
         # close the file writer
+        outfile.write(blockbuilder) #write out what's remanining in the blockbuilder
         outfile.close()
     if debugMode:
         with open((outputFolder + "noHandleReads.txt"), 'w') as noHandle_file:
@@ -188,11 +192,11 @@ def Processfile(fq):
 
 # A function that writes bad barcodes and reads to a file for debug
 # This function significantly increases runtime, when bc are not being debugged please opt to use normal "CorrectCellBarcodes" instead.
-def DebugBadBarcodes(bc1, bc2, read):
+def DebugBadBarcodes(bc1, bc2, line, BCmutationstats_list):
     with open((outputFolder + "badBarcodes.txt"), 'a') as badBarcode_file:
-        BC1_check = CheckCellBarcode(bc1)
-        BC2_check = CheckCellBarcode(bc2)
-        if BC1_check is None:  # If either barcode is faulty
+        BC1_check = CheckCellBarcode2col(bc1, 1, line, BCmutationstats_list)
+        BC2_check = CheckCellBarcode2col(bc2, 2, line, BCmutationstats_list)
+        if BC1_check is None:
             badBarcode_file.write("BC1 is bad: " + bc1 + " ")
         if BC2_check is None:
             badBarcode_file.write("BC2 is bad: " + bc2 + " ")
@@ -201,24 +205,7 @@ def DebugBadBarcodes(bc1, bc2, read):
             return None
         else: return BC1_check + BC2_check
 
-# DEPRECATED: requires same optimizations implemented in the 2col version.
-def CorrectCellBarcodes(bc1, bc2):
-    BC1_check = CheckCellBarcode(bc1)
-    BC2_check = CheckCellBarcode(bc2)
-    if None in [BC1_check, BC2_check]:
-        return None
-    else: return BC1_check + BC2_check
-
-def CheckCellBarcode(bc):
-    if bc in cellBC_codes:
-        return bc
-    else:
-        pattern = "(" + bc + "){e<=1}"
-        for cellBC in cellBC_codes:
-            match = regex.search(pattern, cellBC, regex.BESTMATCH)
-            if match is not None: return cellBC
-        return None
-
+#@profile
 def CorrectCellBarcodes2col(bc1, bc2, line, BCmutationstats_list):
     BC1_check = CheckCellBarcode2col(bc1, 1, line, BCmutationstats_list)
     BC2_check = CheckCellBarcode2col(bc2, 2, line, BCmutationstats_list)
@@ -226,32 +213,30 @@ def CorrectCellBarcodes2col(bc1, bc2, line, BCmutationstats_list):
         return None
     else: return BC1_check + BC2_check
 
+#@profile
 def CheckCellBarcode2col(bc, col, line, BCmutationstats_list):
-    cellBCs = cellBC_codes_col1 if col == 1 else cellBC_codes_col2
+    cellBCs = cellBC_list_col1 if col == 1 else cellBC_list_col2
     if bc in cellBCs:
         return bc
     else:
-        possibleBCs = []
-        matches = []
         pattern = "(" + bc + "){e<=1}"
-        for cellBC in cellBCs:
-            match = regex.search(pattern, cellBC, regex.BESTMATCH) #Fuzzy_counts=(subsitutions, insertions, deletions)
-            if match is not None:
-                matches.append(match)
-                possibleBCs.append(cellBC)
-        if len(possibleBCs) > 0:
-            if len(possibleBCs) > 1:
-                for i, element in enumerate(matches):
-                    if (element.span()[1] - element.span()[0]) == BClen:  # Only select the match that is actually an entire barcode length
-                        # previous testing of this part has determined that only one match will equal the barcode length, the other ones will be shorter
-                        BCmutationstats_list[0]+=1 #In this situation, has to be a subsitutions
-                        return possibleBCs[i]
-            else:
-                # Keeping track of the amount of subsitutions and deletions
-                for i in range(len(BCmutationstats_list)):
-                    BCmutationstats_list[i] += matches[0].fuzzy_counts[i]
-                return possibleBCs[0]
-        else: return None
+        cellBC_str = cellBC_str_col1 if col == 1 else cellBC_str_col2
+        match = regex.search(pattern, cellBC_str, regex.BESTMATCH) #Fuzzy_counts=(subsitutions, insertions, deletions)
+        if match is None: return None
+        else:
+            # If subsitution match
+            matchedBC = match.group()
+            if (match.span()[1] - match.span()[0]) == BClen and ("." not in match.group()):
+                BCmutationstats_list[0]+=1 #In this situation, has to be a subsitutions
+                return matchedBC # In reality, i have to do a lot more checking than this and find the right BC
+            else: #Its a deletion and we need to work even more to match the right barcode
+                BCmutationstats_list[2]+=1
+                #Lets use math. If every barcode covers 12 chars in the string, we should be able to use the modulo
+                #operator to extract the right barcode.
+                barcodeNum = match.span()[1] // DIVIDER
+                barcodeLoc = barcodeNum * DIVIDER
+                barcode = cellBC_str[barcodeLoc:(barcodeLoc+BClen)]
+                return barcode
 
 def SkipToNextRead(file):
     try:
@@ -263,18 +248,40 @@ def SkipToNextRead(file):
 def ResetVars(id, rna, QC):
     id = rna = QC = ""
 
+def GenerateSyntheticBarcodes(amount):
+    nucleotides = ['A', 'C', 'G', 'T']
+    sequences = []
+    for i in range(amount):
+        sequence = ''
+        for j in range(3):
+            sequence += nucleotides[i % 4]
+            i //= 4
+        sequences.append(sequence)
+
+    return sequences
+
+syntheticBarcodes = GenerateSyntheticBarcodes(len(fastq_files))
 
 # pool = ThreadPool(processes=MAX_THREADS)
 #
-# # for fq in fastq_files:
-# #     #add the files to the multithreading handler
-# #     result = pool.apply_async(Processfile, args=(fq, 1))
-# #     #print(result.successful())
+# for fq in fastq_files:
+#     if fq == ".DS_Store": continue
+#     sample_ID_match = regex.search(r'OL_GG_(\d+)', fq)
+#     sample_ID = sample_ID_match.group(1)
+#     #add the files to the multithreading handler
+#     try:
+#         result = pool.apply_async(Processfile, args=(fq, syntheticBarcodes[int(sample_ID)-1]))
+#     except Exception as e:
+#         print(e)
+#
+#     #print(result.successful())
+#     print(sample_ID + " :" + "was assigned synthetic code: " + syntheticBarcodes[int(sample_ID)-1])
+#
 #
 # pool.close()
 # pool.join()
 
-#print("All files processed!", flush=True)
+print("All files processed!", flush=True)
 
-Processfile("millionreads.fq.gz")
-#Processfile("ye.fq.gz")
+#Processfile("millionreads.fq.gz")
+Processfile("ye.fq.gz", "AAA")
