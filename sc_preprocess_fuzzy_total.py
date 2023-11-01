@@ -1,37 +1,66 @@
 # Author: David Bellini
-# Date: 8.24.23
+# Date: 11.1.23
 # A script to conduct all necessary preprocessing on raw single cell data for the cell atlas, total RNA format.
-# Optimizations needed:
-#   - Reading and writing optimizations: read single string, then write single string.
-
+import os
 import sys
 from os import listdir
 from os.path import isfile, join
 import gzip
 import regex
 from multiprocessing.pool import ThreadPool
-import traceback
+#import traceback
 #from line_profiler_pycharm import profile
+import argparse
 
-#fastqgz_directory = sys.argv[1]
-#outdir = sys.argv[2]
-#sampleBCfileName = sys.argv[2]
+parser = argparse.ArgumentParser(
+    description="A demultiplexing script using regex for careful barcode correction of total RNA matq-drop experiments"
+)
+parser.add_argument("fastqgz_directory", type=str, help="the filepath for the directory containing the fastq.gz files to be" \
+                                                       "processed")
+parser.add_argument("barcode_file", type=str, help="The full path to the barcode file containing 2 columns, one for barcode one and"
+                                                   "one for barcode 2")
+parser.add_argument("fastqgz_samplestring", type=str, help="The identifying sample characters of the samples. For ex: If I have 3 samples like so:\n"
+                                                           "\tGS_D01_CKDL230034544-1A_22F222LT3_L8.fq.gz\n"
+                                                           "\tGS_D02_CKDL230034544-1A_22F222LT3_L8.fq.gz\n"
+                                                           "\tGS_D03_CKDL230034544-1A_22F222LT3_L8.fq.gz\n"
+                                                           "Then the identifying sample characters would be 'GS_D' - 01,02, and 03 will be selected and used to assign"
+                                                           "synthetic sample barcodes in the code")
+parser.add_argument("-a", "--handle", type=str, help="The handle that should be selected. This algorithm uses the handle to determine the location"
+                                             "of all other RNA features (bc, umi, etc)", default="TGGTAGGTGGTAGAGA")
+parser.add_argument("-o", "--output", type=str, help="output directory", default="results/")
+parser.add_argument("-t", "--threads", type=int, help="number of threads to be used. default is 1. Recommended to use as many threads"
+                                                      "as there are files, if possible", default=1)
+parser.add_argument("-b", "--barcodelen", type=int, help="length of the barcodes. default is 10", default=10)
+parser.add_argument("-u", "--umilen", type=int, help="length of the umis. default is 8", default=8)
+parser.add_argument("-m", "--maxhandlepos", type=int, help="the furthest position at which you would expect to find the barcode. "
+                                                           "debugMode can be useful to find this if uknown.", default=45)
+parser.add_argument("-d", "--debugmode", action=argparse.BooleanOptionalAction, help="calculates and outputs additional statistics, "
+                                                                                     "such as handle position distribution, and bad barcodes")
+
+args = vars(parser.parse_args())
+
+fastqgz_directory = args["fastqgz_directory"]
+outputFolder = args["output"]
+cellBCfileName = args["barcode_file"]
+samplestr = args["fastqgz_samplestring"]
 
 
-# Directory shortcuts
-fastqgz_directory = "/home/davidbellini/files/workspace/gg_ol1_analysis/pp_fuzzy_rdy/"
-cellBCfileName = "/home/davidbellini/files/workspace/gg_ol1_analysis//MATQ_Drop_384x384_barcode.tsv"
-outputFolder = "/home/davidbellini/files/workspace/gg_ol1_analysis/results/"
+
+# hardcoded shortcuts
+#fastqgz_directory = "/home/davidbellini/files/workspace/sg_ol2_analysis/fastq_files_merged_aatrimmed/"
+#cellBCfileName = "/home/davidbellini/files/workspace/sg_ol2_analysis/MATQ_Drop_384x384_barcode.tsv"
+#outputFolder = "/home/davidbellini/files/workspace/sg_ol2_analysis/results/"
+
 
 # Parameter Vars
-
-MAX_THREADS = 4
-BClen = 10 #expected length of the barcodes
+MAX_THREADS = args["threads"]
+BClen = args["barcodelen"] #expected length of the barcodes
 DIVIDER = BClen + 2
-UMIlen = 8
-MAX_HANDLE_POS = 45 #Handle is not expected to the farther than 16 bases from the start
+UMIlen = args["umilen"]
+MAX_HANDLE_POS = args["maxhandlepos"] #Handle is not expected to the farther than 16 bases from the start
 # debugmode and single column mode require fixes if they are to be used in the future
-debugMode = False
+debugMode = args["debugmode"]
+#handle = args["handle"]
 handle = "TGGTAGGTGGTAGAGA"
 handlePattern = "(" + handle + "){e<=3}"
 sampleBC_to_ID = {}
@@ -59,7 +88,6 @@ print("Cell BC file read", flush=True)
 
 fastq_files = [f for f in listdir(fastqgz_directory) if isfile(join(fastqgz_directory, f))]
 
-#@profile
 def Processfile(fq, synth_code):
     print("Processing " + fq + " ...", flush=True)
     fq_path = fastqgz_directory + fq
@@ -78,6 +106,7 @@ def Processfile(fq, synth_code):
     # read content from original fastq file and prep for processing
     with gzip.open(fq_path, 'rt') as f:
         name = fq.split(".")[0]
+        if not os.path.exists(outputFolder) : os.makedirs(outputFolder)
         outfile = gzip.open((outputFolder + name + "_processed.fq.gz"), 'wt')
         read2 = False
         rna_to_write = ""
@@ -201,7 +230,7 @@ def DebugBadBarcodes(bc1, bc2, line, BCmutationstats_list):
         if BC2_check is None:
             badBarcode_file.write("BC2 is bad: " + bc2 + " ")
         if None in [BC1_check, BC2_check]:
-            badBarcode_file.write("BAD read: " + read + '\n')
+            badBarcode_file.write("BAD read: " + line + '\n')
             return None
         else: return BC1_check + BC2_check
 
@@ -262,26 +291,26 @@ def GenerateSyntheticBarcodes(amount):
 
 syntheticBarcodes = GenerateSyntheticBarcodes(len(fastq_files))
 
-# pool = ThreadPool(processes=MAX_THREADS)
-#
-# for fq in fastq_files:
-#     if fq == ".DS_Store": continue
-#     sample_ID_match = regex.search(r'OL_GG_(\d+)', fq)
-#     sample_ID = sample_ID_match.group(1)
-#     #add the files to the multithreading handler
-#     try:
-#         result = pool.apply_async(Processfile, args=(fq, syntheticBarcodes[int(sample_ID)-1]))
-#     except Exception as e:
-#         print(e)
-#
-#     #print(result.successful())
-#     print(sample_ID + " :" + "was assigned synthetic code: " + syntheticBarcodes[int(sample_ID)-1])
-#
-#
-# pool.close()
-# pool.join()
+pool = ThreadPool(processes=MAX_THREADS)
+
+for fq in fastq_files:
+    if fq == ".DS_Store": continue
+    id_str = samplestr + "(\d+)"
+    sample_ID_match = regex.search(id_str, fq)
+    sample_ID = sample_ID_match.group(1)
+    #add the files to the multithreading handler
+    try:
+        result = pool.apply_async(Processfile, args=(fq, syntheticBarcodes[int(sample_ID)-1]))
+    except Exception as e:
+        print(e)
+
+    #print(result.successful())
+    print(sample_ID + " :" + "was assigned synthetic code: " + syntheticBarcodes[int(sample_ID)-1])
+
+
+pool.close()
+pool.join()
 
 print("All files processed!", flush=True)
 
-#Processfile("millionreads.fq.gz")
-Processfile("ye.fq.gz", "AAA")
+Processfile("test.fq.gz", "AAA")
